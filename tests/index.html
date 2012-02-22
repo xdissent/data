@@ -33,8 +33,9 @@
   </script>
 
   <script type="text/javascript" src="minispade.js"></script>
-  <script type="text/javascript" src="source/ember.js"></script>
-  <script type="text/javascript" src="source/ember-tests.js"></script>
+  <script type="text/javascript" src="../packages/ember/lib/main.js"></script>
+  <script type="text/javascript" src="../dist/ember-data.spade.js"></script>
+  <script type="text/javascript" src="ember-data-tests.js"></script>
 
   <script type="text/javascript">
     // Handle extending prototypes
@@ -78,9 +79,6 @@
       }
 
       len = packages.length;
-
-      // There is no require for this in the code
-      minispade.require('ember');
 
       for (idx=0; idx<len; idx++) {
         packageName = packages[idx];
