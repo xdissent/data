@@ -20,7 +20,7 @@ end
 
 desc "Clean build artifacts from previous builds"
 task :clean do
-  sh "rm -rf dist tests/ember-data-tests.js"
+  sh "rm -rf tmp dist tests/ember-data-tests.js"
 end
 
 ### UPLOAD LATEST EMBERJS BUILD TASK ###
