@@ -1,3 +1,6 @@
+require("ember-data/core");
+require("ember-data/adapters/adapter");
+
 /*global jQuery*/
 var get = Ember.get, set = Ember.set, getPath = Ember.getPath;
 
