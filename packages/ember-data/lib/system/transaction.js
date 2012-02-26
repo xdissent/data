@@ -1,120 +1,12 @@
 var get = Ember.get, set = Ember.set, getPath = Ember.getPath, fmt = Ember.String.fmt;
 
-var OrderedSet = Ember.Object.extend({
-  init: function() {
-    this.clear();
-  },
-
-  clear: function() {
-    this.set('presenceSet', {});
-    this.set('list', Ember.NativeArray.apply([]));
-  },
-
-  add: function(obj) {
-    var guid = Ember.guidFor(obj),
-        presenceSet = get(this, 'presenceSet'),
-        list = get(this, 'list');
-
-    if (guid in presenceSet) { return; }
-
-    presenceSet[guid] = true;
-    list.pushObject(obj);
-  },
-
-  remove: function(obj) {
-    var guid = Ember.guidFor(obj),
-        presenceSet = get(this, 'presenceSet'),
-        list = get(this, 'list');
-
-    delete presenceSet[guid];
-    list.removeObject(obj);
-  },
-
-  isEmpty: function() {
-    return getPath(this, 'list.length') === 0;
-  },
-
-  forEach: function(fn, self) {
-    // allow mutation during iteration
-    get(this, 'list').slice().forEach(function(item) {
-      fn.call(self, item);
-    });
-  },
-
-  toArray: function() {
-    return get(this, 'list').slice();
-  }
-});
-
-/**
-  A Hash stores values indexed by keys. Unlike JavaScript's
-  default Objects, the keys of a Hash can be any JavaScript
-  object.
-
-  Internally, a Hash has two data structures:
-
-    `keys`: an OrderedSet of all of the existing keys
-    `values`: a JavaScript Object indexed by the
-      Ember.guidFor(key)
-
-  When a key/value pair is added for the first time, we
-  add the key to the `keys` OrderedSet, and create or
-  replace an entry in `values`. When an entry is deleted,
-  we delete its entry in `keys` and `values`.
-*/
-
-var Hash = Ember.Object.extend({
-  init: function() {
-    set(this, 'keys', OrderedSet.create());
-    set(this, 'values', {});
-  },
-
-  add: function(key, value) {
-    var keys = get(this, 'keys'), values = get(this, 'values');
-    var guid = Ember.guidFor(key);
-
-    keys.add(key);
-    values[guid] = value;
-
-    return value;
-  },
-
-  remove: function(key) {
-    var keys = get(this, 'keys'), values = get(this, 'values');
-    var guid = Ember.guidFor(key), value;
-
-    keys.remove(key);
-
-    value = values[guid];
-    delete values[guid];
-
-    return value;
-  },
-
-  fetch: function(key) {
-    var values = get(this, 'values');
-    var guid = Ember.guidFor(key);
-
-    return values[guid];
-  },
-
-  forEach: function(fn, binding) {
-    var keys = get(this, 'keys'),
-        values = get(this, 'values');
-
-    keys.forEach(function(key) {
-      var guid = Ember.guidFor(key);
-      fn.call(binding, key, values[guid]);
-    });
-  }
-});
-
 DS.Transaction = Ember.Object.extend({
   init: function() {
-    set(this, 'dirty', {
-      created: Hash.create(),
-      updated: Hash.create(),
-      deleted: Hash.create()
+    set(this, 'buckets', {
+      clean:   Ember.Map.create(),
+      created: Ember.Map.create(),
+      updated: Ember.Map.create(),
+      deleted: Ember.Map.create()
     });
   },
 
@@ -133,35 +25,79 @@ DS.Transaction = Ember.Object.extend({
 
     ember_assert("Models cannot belong to more than one transaction at a time.", modelTransaction === defaultTransaction);
 
+    this.adoptRecord(record);
+  },
+
+  remove: function(record) {
+    var defaultTransaction = getPath(this, 'store.defaultTransaction');
+
+    defaultTransaction.adoptRecord(record);
+  },
+
+  /**
+    @private
+
+    This method moves a record into a different transaction without the normal
+    checks that ensure that the user is not doing something weird, like moving
+    a dirty record into a new transaction.
+
+    It is designed for internal use, such as when we are moving a clean record
+    into a new transaction when the transaction is committed.
+
+    This method must not be called unless the record is clean.
+  */
+  adoptRecord: function(record) {
+    var oldTransaction = get(record, 'transaction');
+
+    if (oldTransaction) {
+      oldTransaction.removeFromBucket('clean', record);
+    }
+
+    this.addToBucket('clean', record);
     set(record, 'transaction', this);
   },
 
-  modelBecameDirty: function(kind, model) {
-    var dirty = get(get(this, 'dirty'), kind),
-        type = model.constructor;
-
-    var models = dirty.fetch(type);
-
-    models = models || dirty.add(type, OrderedSet.create());
-    models.add(model);
+  modelBecameDirty: function(kind, record) {
+    this.removeFromBucket('clean', record);
+    this.addToBucket(kind, record);
   },
 
-  modelBecameClean: function(kind, model) {
-    var dirty = get(get(this, 'dirty'), kind),
-        type = model.constructor,
-        defaultTransaction = getPath(this, 'store.defaultTransaction');
+  /** @private */
+  addToBucket: function(kind, record) {
+    var bucket = get(get(this, 'buckets'), kind),
+        type = record.constructor;
 
-    var models = dirty.fetch(type);
-    models.remove(model);
+    var records = bucket.get(type);
 
-    set(model, 'transaction', defaultTransaction);
+    if (!records) {
+      records = Ember.OrderedSet.create();
+      bucket.set(type, records);
+    }
+
+    records.add(record);
+  },
+
+  /** @private */
+  removeFromBucket: function(kind, record) {
+    var bucket = get(get(this, 'buckets'), kind),
+        type = record.constructor;
+
+    var records = bucket.get(type);
+    records.remove(record);
+  },
+
+  modelBecameClean: function(kind, record) {
+    this.removeFromBucket(kind, record);
+
+    var defaultTransaction = getPath(this, 'store.defaultTransaction');
+    defaultTransaction.adoptRecord(record);
   },
 
   commit: function() {
-    var dirtyMap = get(this, 'dirty');
+    var buckets = get(this, 'buckets');
 
     var iterate = function(kind, fn, binding) {
-      var dirty = get(dirtyMap, kind);
+      var dirty = get(buckets, kind);
 
       dirty.forEach(function(type, models) {
         if (models.isEmpty()) { return; }
@@ -196,6 +132,16 @@ DS.Transaction = Ember.Object.extend({
 
     var store = get(this, 'store');
     var adapter = get(store, '_adapter');
+
+    var clean = get(buckets, 'clean');
+    var defaultTransaction = get(store, 'defaultTransaction');
+
+    clean.forEach(function(type, records) {
+      records.forEach(function(record) {
+        this.remove(record);
+      }, this);
+    }, this);
+
     if (adapter && adapter.commit) { adapter.commit(store, commitDetails); }
     else { throw fmt("Adapter is either null or do not implement `commit` method", this); }
   }
