@@ -7,14 +7,23 @@ DS.Model.reopenClass({
     var map = Ember.Map.create();
 
     this.eachComputedProperty(function(name, meta) {
-      if (meta.isAttribute) {
-        meta.key = meta.key || name;
-        map.set(name, meta);
-      }
+      if (meta.isAttribute) { map.set(name, meta); }
     });
 
     return map;
-  }).cacheable()
+  }).cacheable(),
+
+  processAttributeKeys: function() {
+    if (this.processedAttributeKeys) { return; }
+
+    var namingConvention = this.proto().namingConvention;
+
+    this.eachComputedProperty(function(name, meta) {
+      if (meta.isAttribute && !meta.options.key) {
+        meta.options.key = namingConvention.keyToJSONKey(name, this);
+      }
+    }, this);
+  }
 });
 
 DS.attr = function(type, options) {
@@ -26,12 +35,23 @@ DS.attr = function(type, options) {
 
   options = options || {};
 
-  var meta = { type: type, isAttribute: true, key: options.key };
+  var meta = {
+    type: type,
+    isAttribute: true,
+    options: options,
+
+    // this will ensure that the key always takes naming
+    // conventions into consideration.
+    key: function(recordType) {
+      recordType.processAttributeKeys();
+      return options.key;
+    }
+  };
 
   return Ember.computed(function(key, value) {
     var data;
 
-    key = options.key || key;
+    key = meta.key(this.constructor);
 
     if (arguments.length === 2) {
       value = transformTo(value);
@@ -39,6 +59,10 @@ DS.attr = function(type, options) {
     } else {
       data = get(this, 'data');
       value = get(data, key);
+
+      if (value === undefined) {
+        value = options.defaultValue;
+      }
     }
 
     return transformFrom(value);
@@ -59,7 +83,7 @@ DS.attr.transforms = {
     }
   },
 
-  integer: {
+  number: {
     from: function(serialized) {
       return Ember.none(serialized) ? null : Number(serialized);
     },
@@ -69,7 +93,7 @@ DS.attr.transforms = {
     }
   },
 
-  boolean: {
+  'boolean': {
     from: function(serialized) {
       return Boolean(serialized);
     },
